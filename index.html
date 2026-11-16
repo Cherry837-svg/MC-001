@@ -1,10 +1,11 @@
+ 
  <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Videozvonok</title>
-  <script src="https://unpkg.com"></script>
+  <title>Videozvonok v3</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -146,10 +147,9 @@
     <button id="btn-end" class="ctrl-btn end-btn">End</button>
   </div>
 
-  <div id="status">Gotov k rabote (v2)</div>
+  <div id="status">Gotov k rabote (v3)</div>
 
   <script>
-    // Tvoy unikalnyy ID komnaty
     const ROOM_ID = 'cherry837-mc-001-zvonok-9941';
 
     const remoteVideo = document.getElementById('remote-video');
@@ -166,12 +166,11 @@
     let isMicMuted = false;
     let hideTimer = null;
 
-    // Nastroyki STUN-serverov Google dlya stabilnoy svyazi cherez lyuboy internet
     const peerConfig = {
       config: {
         iceServers: [
-          { urls: 'stun:://google.com' },
-          { urls: 'stun:://google.com' }
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
         ]
       }
     };
@@ -208,7 +207,7 @@
         if (mode === 'wait') {
           currentPeer = new Peer(ROOM_ID, peerConfig);
 
-          currentPeer.on('open', (id) => {
+          currentPeer.on('open', () => {
             status.innerText = '3/3 Ozhidanie vtorogo ustroystva...';
           });
 
@@ -261,7 +260,7 @@
 
     function toggleMic() {
       if (!myStream) return;
-      const audioTrack = myStream.getAudioTracks()[0];
+      const audioTrack = myStream.getAudioTracks().at(0);
       if (audioTrack) {
         isMicMuted = !isMicMuted;
         audioTrack.enabled = !isMicMuted;
@@ -282,16 +281,16 @@
           video: { facingMode: currentFacing },
           audio: false
         });
-        const newVideoTrack = newStream.getVideoTracks()[0];
+        const newVideoTrack = newStream.getVideoTracks().at(0);
 
-        const oldVideoTrack = myStream.getVideoTracks()[0];
+        const oldVideoTrack = myStream.getVideoTracks().at(0);
         if (oldVideoTrack) myStream.removeTrack(oldVideoTrack);
-        myStream.addTrack(newVideoTrack);
+        if (newVideoTrack) myStream.addTrack(newVideoTrack);
         
         localVideo.srcObject = myStream;
         localVideo.classList.toggle('back-cam', currentFacing === 'environment');
 
-        if (currentCall && currentCall.peerConnection) {
+        if (currentCall && currentCall.peerConnection && newVideoTrack) {
           const sender = currentCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
           if (sender) {
             sender.replaceTrack(newVideoTrack);
@@ -341,3 +340,39 @@
       } else {
         if (document.exitFullscreen) {
           document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+      }
+    }
+
+    document.body.addEventListener('click', (e) => {
+      if (remoteVideo.srcObject && remoteVideo.paused) {
+        remoteVideo.play();
+        status.style.display = 'none';
+      }
+      if (e.target.tagName !== 'BUTTON') {
+        showCallBar();
+      }
+    });
+
+    document.body.addEventListener('dblclick', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      toggleFullScreen();
+    });
+
+    let lastTap = 0;
+    document.body.addEventListener('touchend', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      const currentTime = new Date().getTime();
+      if (currentTime - lastTap < 300 && currentTime - lastTap > 0) {
+        e.preventDefault();
+        toggleFullScreen();
+      }
+      lastTap = currentTime;
+    });
+  </script>
+
+</body>
+</html>
+
