@@ -1,0 +1,337 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Videozvonok</title>
+  <script src="https://unpkg.com"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #000000;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      user-select: none;
+      position: relative;
+    }
+
+    /* Video sobesednika na ves ekran */
+    #remote-video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000000;
+    }
+
+    /* Vashe malenkoe okoshko v uglu */
+    #local-video {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      width: 105px;
+      height: 150px;
+      object-fit: cover;
+      border-radius: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+      background: #111;
+      z-index: 15;
+      transform: scaleX(-1);
+      display: none;
+      transition: transform 0.2s;
+    }
+    #local-video.back-cam {
+      transform: scaleX(1); /* Zadnyuyu kameru ne zerkalim */
+    }
+
+    /* Startovye knopki */
+    #controls {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      width: 85%;
+      max-width: 320px;
+      z-index: 20;
+    }
+    .start-btn {
+      padding: 16px 20px;
+      font-size: 16px;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      background: #2563eb;
+      color: white;
+      font-weight: bold;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+    }
+    .start-btn.call-btn {
+      background: #10b981;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+    }
+    .start-btn:active { opacity: 0.85; }
+
+    /* Panel upravleniya vo vremya zvonka (poyavlyaetsya po tapu) */
+    #call-bar {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      gap: 18px;
+      background: rgba(20, 20, 20, 0.65);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      padding: 12px 22px;
+      border-radius: 40px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      z-index: 30;
+      transition: opacity 0.3s ease;
+    }
+    #call-bar.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .ctrl-btn {
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255, 255, 255, 0.18);
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .ctrl-btn:active { transform: scale(0.92); }
+    .ctrl-btn.muted {
+      background: #ffffff;
+      color: #111111;
+    }
+    .ctrl-btn.end-btn {
+      background: #ef4444;
+      color: #ffffff;
+    }
+
+    /* Status */
+    #status {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 14px;
+      color: #e5e7eb;
+      background: rgba(0, 0, 0, 0.65);
+      padding: 8px 16px;
+      border-radius: 20px;
+      text-align: center;
+      z-index: 25;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="controls">
+    <button class="start-btn" onclick="joinCall('wait')">1. Zhdat zvonok (Otkryt pervym)</button>
+    <button class="start-btn call-btn" onclick="joinCall('call')">2. Pozvonit (Otkryt vtorym)</button>
+  </div>
+
+  <video id="remote-video" autoplay playsinline></video>
+  <video id="local-video" autoplay playsinline muted></video>
+
+  <!-- Prozrachnye knopki upravleniya -->
+  <div id="call-bar">
+    <button id="btn-mic" class="ctrl-btn" onclick="toggleMic()">Mic</button>
+    <button id="btn-cam" class="ctrl-btn" onclick="switchCamera()">Cam</button>
+    <button class="ctrl-btn end-btn" onclick="endCall()">End</button>
+  </div>
+
+  <div id="status">Vyberi deystvie</div>
+
+  <script>
+    // ZAMENI na svoe sekretnoe slovo (odinakovoe dlya oboikh)
+    const ROOM_ID = 'moy-videozvonok-98765';
+
+    const remoteVideo = document.getElementById('remote-video');
+    const localVideo = document.getElementById('local-video');
+    const controls = document.getElementById('controls');
+    const status = document.getElementById('status');
+    const callBar = document.getElementById('call-bar');
+    const btnMic = document.getElementById('btn-mic');
+
+    let myStream = null;
+    let currentCall = null;
+    let currentPeer = null;
+    let currentFacing = 'user'; // 'user' - frontalnaya, 'environment' - zadnyaya
+    let isMicMuted = false;
+    let hideTimer = null;
+
+    async function joinCall(mode) {
+      controls.style.display = 'none';
+      status.innerText = 'Zapusk kamery i mikrofona...';
+
+      try {
+        myStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: currentFacing },
+          audio: { echoCancellation: true, noiseSuppression: true }
+        });
+
+        localVideo.srcObject = myStream;
+        localVideo.style.display = 'block';
+        keepScreenAwake();
+
+        if (mode === 'wait') {
+          status.innerText = 'Ozhidanie sobesednika...';
+          currentPeer = new Peer(ROOM_ID);
+
+          currentPeer.on('call', (call) => {
+            currentCall = call;
+            call.answer(myStream);
+            handleStream(call);
+          });
+
+          currentPeer.on('error', (err) => {
+            status.style.display = 'block';
+            status.innerText = 'Oshibka: ' + err.type;
+          });
+
+        } else {
+          status.innerText = 'Soedinenie...';
+          currentPeer = new Peer();
+
+          currentPeer.on('open', () => {
+            currentCall = currentPeer.call(ROOM_ID, myStream);
+            handleStream(currentCall);
+          });
+
+          currentPeer.on('error', (err) => {
+            status.style.display = 'block';
+            status.innerText = 'Oshibka: ' + err.type;
+          });
+        }
+      } catch (err) {
+        status.innerText = 'Net dostupa k kamere: ' + err.message;
+      }
+    }
+
+    function handleStream(call) {
+      call.on('stream', (remoteStream) => {
+        remoteVideo.srcObject = remoteStream;
+        remoteVideo.play().catch(() => {
+          status.style.display = 'block';
+          status.innerText = 'Tapni po ekranu dlya zvuka';
+        });
+        status.style.display = 'none';
+        callBar.style.display = 'flex';
+        showCallBar(); // Pokazyvaem knopki na 4 sekundy i pryachem
+      });
+
+      call.on('close', () => {
+        endCall();
+      });
+    }
+
+    // 1. Vyklyuchit / vklyuchit mikrofon
+    function toggleMic() {
+      if (!myStream) return;
+      const audioTrack = myStream.getAudioTracks()[0];
+      if (audioTrack) {
+        isMicMuted = !isMicMuted;
+        audioTrack.enabled = !isMicMuted;
+        btnMic.innerText = isMicMuted ? 'Off' : 'Mic';
+        btnMic.classList.toggle('muted', isMicMuted);
+      }
+      showCallBar();
+    }
+
+    // 2. Pereklyuchit kameru (perednyaya / zadnyaya) na letu
+    async function switchCamera() {
+      if (!myStream) return;
+      currentFacing = (currentFacing === 'user') ? 'environment' : 'user';
+      
+      // Ostanavlivaem staruyu kameru
+      myStream.getVideoTracks().forEach(track => track.stop());
+
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: currentFacing },
+          audio: false
+        });
+        const newVideoTrack = newStream.getVideoTracks()[0];
+
+        // Obnovlyaem svoe okoshko
+        const oldVideoTrack = myStream.getVideoTracks()[0];
+        myStream.removeTrack(oldVideoTrack);
+        myStream.addTrack(newVideoTrack);
+        localVideo.srcObject = myStream;
+        localVideo.classList.toggle('back-cam', currentFacing === 'environment');
+
+        // Podmenyaem videopotok dlya sobesednika bez razryva zvonka
+        if (currentCall && currentCall.peerConnection) {
+          const sender = currentCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (sender) {
+            sender.replaceTrack(newVideoTrack);
+          }
+        }
+      } catch (err) {
+        status.style.display = 'block';
+        status.innerText = 'Ne udalos pereklyuchit kameru';
+        setTimeout(() => { status.style.display = 'none'; }, 2000);
+      }
+      showCallBar();
+    }
+
+    // 3. Polozhit trubku
+    function endCall() {
+      if (myStream) {
+        myStream.getTracks().forEach(track => track.stop());
+      }
+      if (currentCall) currentCall.close();
+      if (currentPeer) currentPeer.destroy();
+      location.reload(); // Perezagruzhaem stranicu na startovyy ekran
+    }
+
+    // Pokaz i avtoskrytie nizhney paneli knopok
+    function showCallBar() {
+      if (callBar.style.display === 'none') return;
+      callBar.classList.remove('hidden');
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => {
+        callBar.classList.add('hidden');
+      }, 4000);
+    }
+
+    async function keepScreenAwake() {
+      try {
+        if ('wakeLock' in navigator) {
+          await navigator.wakeLock.request('screen');
+        }
+      } catch (e) {}
+    }
+
+    function toggleFullScreen() {
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        if (document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen();
+        } else if (document.documentElement.webkitRequestFullscreen) {
+          document.documentElement.webkitRequestFullscreen();
+        }
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+      }
+    }
+
